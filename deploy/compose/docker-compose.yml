@@ -1,0 +1,77 @@
+# Local demonstration only: OpenSearch security is intentionally disabled.
+services:
+  flowstitch:
+    image: ${FLOWSTITCH_IMAGE:-kraicdesign/flowstitch:latest}
+    build:
+      context: ../..
+      args:
+        VERSION: ${FLOWSTITCH_VERSION:-compose}
+        REVISION: ${FLOWSTITCH_REVISION:-unknown}
+        CREATED: ${FLOWSTITCH_CREATED:-unknown}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../../config/flowstitch.container.yaml:/etc/flowstitch/flowstitch.yaml:ro
+      - flowstitch-state:/var/lib/flowstitch
+    environment:
+      FLOWSTITCH_OPENSEARCH_USERNAME: ${FLOWSTITCH_OPENSEARCH_USERNAME:-}
+      FLOWSTITCH_OPENSEARCH_PASSWORD: ${FLOWSTITCH_OPENSEARCH_PASSWORD:-}
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    stop_grace_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+
+  opensearch:
+    image: opensearchproject/opensearch:3.8.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.8.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  fluent-bit:
+    image: fluent/fluent-bit:4.1.0
+    profiles: [input]
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    depends_on:
+      flowstitch:
+        condition: service_healthy
+
+volumes:
+  flowstitch-state:
+  opensearch-data:

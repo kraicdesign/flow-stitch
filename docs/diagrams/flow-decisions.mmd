@@ -1,0 +1,24 @@
+%% Every decision made when an event joins a flow.
+flowchart TD
+    A[event arrives] --> B{correlation key resolves?}
+    B -- no --> P[pass-through buffer]
+    B -- yes --> C{open flow for this key?}
+    C -- no --> D[open a new flow]
+    C -- yes --> E[load the flow]
+    D --> F{event type fills a stitch role?}
+    E --> F
+    F -- no --> G[plain entry]
+    F -- yes --> H{all group_by values resolve?}
+    H -- no --> G
+    H -- yes --> I{is that role slot filled?}
+    I -- no --> J[fill the slot]
+    I -- yes --> K{identical content?}
+    K -- yes --> L[count a duplicate, store nothing]
+    K -- no --> M[cardinality anomaly, keep as plain entry]
+
+    J --> N{every invocation complete?}
+    G --> N
+    L --> N
+    M --> N
+    N -- yes --> O[close, unless settle is set]
+    N -- no --> Q[stay open until timeout]

@@ -1,0 +1,23 @@
+# Build output
+/bin/
+coverage.out
+*.test
+
+# Local state written by the durable store
+/var/
+/data/
+
+# Local configuration and secrets — never commit credentials (§25)
+/config/*.local.yaml
+.env
+.env.*
+!/deploy/compose/.env.example
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local task backlog — working files, not project documentation
+.codex/

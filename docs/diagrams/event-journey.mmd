@@ -1,0 +1,47 @@
+%% One event, end to end.
+%% Rendered by GoLand's Mermaid support; also renders on GitHub.
+sequenceDiagram
+    autonumber
+    participant FB as Fluent Bit
+    participant API as adapters/httpapi
+    participant ING as application/ingest
+    participant REG as rule registry
+    participant ST as state store
+    participant FL as domain/flow
+    participant DR as application/deliver
+    participant OS as OpenSearch
+
+    FB->>API: POST /v1/events
+    API->>ING: raw document plus observed_at
+    ING->>ING: capacity check
+    ING->>REG: which rule owns this event?
+
+    alt no correlation key resolves
+        ING->>DR: hand to pass-through buffer
+        Note over ING,DR: memory only, never written to disk
+        ING-->>API: passed_through
+    else a rule claims it
+        REG-->>ING: rule plus correlation key
+        ING->>ST: begin transaction
+        ST-->>ING: existing flow, or none
+        ING->>FL: apply the event
+        FL-->>ING: stored, duplicate, or anomaly
+        ING->>FL: should this flow close?
+
+        alt still waiting
+            ING->>ST: save flow and expiry entry
+            ING-->>API: correlated
+        else closing
+            ING->>ST: enqueue document in outbox
+            ING->>ST: delete open flow
+            ING-->>API: finalized
+        end
+    end
+
+    API-->>FB: 202 Accepted
+
+    Note over DR,OS: independently, on its own interval
+    DR->>ST: pending outbox records
+    DR->>OS: bulk index, outbox first then pass-through
+    OS-->>DR: one status per item
+    DR->>ST: delivered removed, retryable backed off, permanent dead-lettered

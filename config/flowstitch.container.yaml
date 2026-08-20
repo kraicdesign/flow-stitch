@@ -1,0 +1,101 @@
+# Container deployment example. Keep /var/lib/flowstitch on a named volume or bind mount:
+# accepted events and the outbox are durable only while this directory survives. The runtime
+# stop timeout must exceed server.shutdown_grace; Compose stop_grace_period and the Makefile's
+# docker-run --stop-timeout are both 20s. The image healthcheck start period is 2m and should
+# be raised above the worst-case store-open and expiry-recovery time for the deployment.
+server:
+  address: ":8080"
+  read_timeout: 15s
+  write_timeout: 15s
+  shutdown_grace: 15s
+  max_request_size: 4194304
+  admin_token_env: FLOWSTITCH_ADMIN_TOKEN
+
+state:
+  driver: pebble
+  path: /var/lib/flowstitch
+  sync_writes: true
+
+passthrough:
+  enabled: true
+  index: logs-{yyyy}.{MM}.{dd}
+  timestamp: $.datetime
+  buffer_size: 10000
+  batch_size: 500
+  flush_interval: 1s
+
+alerts:
+  enabled: true
+  index: flowstitch-alerts-{yyyy}.{MM}.{dd}
+  min_interval: 5m
+  outbox_age_threshold: 5m
+
+rules:
+  - id: application-flow
+    enabled: true
+    extract:
+      event_type: $.event
+      timestamp: $.datetime
+    correlation:
+      key: $.flow_id
+    stitch:
+      - id: api-invocation
+        group_by: [$.service, $.context.invocation_id]
+        roles:
+          request: http.request
+          response: [http.response, http.error]
+        requires: [request, response]
+    promote:
+      status: {path: $.payload.status, type: long, from: response}
+    lifecycle:
+      timeout: 30s
+      close_when: all_invocations_complete
+      settle: 0s
+      terminal_events: [flow.completed, flow.failed]
+    limits:
+      max_events: 64
+      max_event_bytes: 65536
+      max_flow_bytes: 1048576
+    output:
+      index: application-flows-{yyyy}.{MM}.{dd}
+      timestamp: first_event.timestamp
+
+  - id: audit-session
+    enabled: true
+    extract:
+      event_type: $.kind
+      timestamp: $.created_at
+    correlation:
+      key: $.session.id
+    lifecycle:
+      timeout: 2m
+    limits:
+      max_events: 128
+      max_event_bytes: 65536
+      max_flow_bytes: 1048576
+    output:
+      index: audit-sessions
+      timestamp: first_event.timestamp
+
+sinks:
+  opensearch:
+    addresses:
+      - http://opensearch:9200
+    username_env: FLOWSTITCH_OPENSEARCH_USERNAME
+    password_env: FLOWSTITCH_OPENSEARCH_PASSWORD
+    tls_skip_verify: false
+    bulk_size: 64
+    flush_interval: 1s
+    max_retries: 8
+
+observability:
+  metrics_path: /metrics
+  log_level: info
+  log_format: json
+
+limits:
+  max_open_flows: 100000
+  max_state_bytes: 1073741824
+  max_outbox_records: 100000
+  max_dlq_records: 10000
+  max_event_bytes: 262144

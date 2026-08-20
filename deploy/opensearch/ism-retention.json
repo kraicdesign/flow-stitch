@@ -1,0 +1,23 @@
+{
+  "policy": {
+    "description": "Example FlowStitch retention policy. The 30-day age is a deployment decision and must be adjusted by the operator.",
+    "default_state": "active",
+    "states": [
+      {
+        "name": "active",
+        "actions": [],
+        "transitions": [
+          {
+            "state_name": "delete",
+            "conditions": {"min_index_age": "30d"}
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [{"delete": {}}],
+        "transitions": []
+      }
+    ]
+  }
+}

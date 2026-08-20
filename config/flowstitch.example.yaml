@@ -1,0 +1,140 @@
+# FlowStitch example configuration.
+#
+# Everything here is validated at boot. A typo in a key, an unknown field, an
+# ambiguous rule or an uncompilable path fails the process
+# before it accepts a single event.
+
+server:
+  address: ":8080"
+  read_timeout: 15s
+  write_timeout: 15s
+  shutdown_grace: 15s
+  max_request_size: 4194304
+  # Administration is absent unless this environment variable contains a token.
+  admin_token_env: FLOWSTITCH_ADMIN_TOKEN
+
+state:
+  # "pebble" is the durable deployment driver. "memory" remains useful for
+  # local experimentation but loses accepted events on restart.
+  driver: memory
+  path: /var/lib/flowstitch
+  # Keep true to ensure an accepted event survives a crash. Setting false
+  # trades away that acknowledgement guarantee for lower write latency.
+  sync_writes: true
+
+# Enabling pass-through puts FlowStitch in the path of all log traffic, not
+# only events that can be correlated. Unmatched logs use a bounded in-memory
+# buffer; Fluent Bit's disk buffer provides retry durability.
+passthrough:
+  enabled: true
+  index: logs-{yyyy}.{MM}.{dd}
+  timestamp: $.datetime
+  buffer_size: 10000
+  batch_size: 500
+  flush_interval: 1s
+
+# Best-effort diagnostics for flow documents held outside OpenSearch. This index
+# has a fixed engine-owned mapping and never contains producer payloads.
+alerts:
+  enabled: true
+  index: flowstitch-alerts-{yyyy}.{MM}.{dd}
+  min_interval: 5m
+  outbox_age_threshold: 5m
+
+rules:
+  # Service logs where each outbound call logs a request and, later, its response.
+  - id: application-flow
+    enabled: true
+
+    extract:
+      event_type: $.event
+      timestamp: $.datetime
+
+    correlation:
+      key: $.flow_id
+
+
+    stitch:
+      - id: api-invocation
+        # group_by decides whether one hop merges into one entry or two (ADR-0006).
+        # Paths become group field names in this order; append rather than reorder to
+        # avoid renaming collision-suffixed mapped fields (id, id2).
+        group_by: [$.service, $.context.invocation_id]
+        roles:
+          # These are literal producer event values, not document paths.
+          request: http.request
+          response: [http.response, http.error]
+        requires: [request, response]
+
+    # Promote only fields that need numeric/date queries or typed aggregations.
+    # Everything else remains searchable as keyword data in the flat-object payload.
+    promote:
+      status: {path: $.payload.status, type: long, from: response}
+
+    lifecycle:
+      timeout: 30s
+      close_when: all_invocations_complete
+      settle: 0s
+      terminal_events: [flow.completed, flow.failed]
+
+    limits:
+      max_events: 64
+      max_event_bytes: 65536
+      max_flow_bytes: 1048576
+
+    output:
+      index: application-flows-{yyyy}.{MM}.{dd}
+      timestamp: first_event.timestamp
+
+  # A differently-shaped producer needs only its own extraction and key paths.
+  # With no stitch block, every event remains a plain entry and closure is timeout-only.
+  - id: audit-session
+    enabled: true
+
+    extract:
+      event_type: $.kind
+      timestamp: $.created_at
+
+    correlation:
+      key: $.session.id
+
+    lifecycle:
+      timeout: 2m
+
+    limits:
+      max_events: 128
+      max_event_bytes: 65536
+      max_flow_bytes: 1048576
+
+    output:
+      index: audit-sessions
+      timestamp: first_event.timestamp
+
+sinks:
+  opensearch:
+    addresses:
+      - http://localhost:9200
+    # Credentials are read from these environment variables, never from this
+    # file, and are never echoed to logs.
+    username_env: FLOWSTITCH_OPENSEARCH_USERNAME
+    password_env: FLOWSTITCH_OPENSEARCH_PASSWORD
+    tls_skip_verify: false
+    bulk_size: 64
+    flush_interval: 1s
+    max_retries: 8
+
+observability:
+  metrics_path: /metrics
+  log_level: info
+  log_format: json
+
+# Global capacity bounds. These decide when FlowStitch stops acknowledging
+# events rather than accepting data it may lose. Exact thresholds remain an
+# unanswered contract question.
+limits:
+  max_open_flows: 100000
+  max_state_bytes: 1073741824
+  max_outbox_records: 100000
+  # Oldest permanent rejections are dropped when this cap is exceeded (ADR-0013).
+  max_dlq_records: 10000
+  max_event_bytes: 262144

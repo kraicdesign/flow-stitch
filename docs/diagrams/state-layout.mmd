@@ -1,0 +1,17 @@
+%% Where state lives, and what survives a restart.
+flowchart LR
+    subgraph disk["Pebble - survives restart"]
+        F["f/ open flows"]
+        X["x/ expiry index, time ordered"]
+        O["o/ outbox"]
+        D["d/ dead letter, capped"]
+    end
+
+    subgraph mem["Memory - lost on restart"]
+        B["pass-through buffer, bounded"]
+        R["active rule snapshot"]
+        G["gauges"]
+    end
+
+    F --- X
+    O --> D

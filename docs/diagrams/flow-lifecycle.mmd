@@ -1,0 +1,18 @@
+%% The life of one flow, from first event to delivered document.
+stateDiagram-v2
+    [*] --> Open: first event carrying the correlation key
+    Open --> Open: more events appended
+
+    Open --> Finalizing: terminal event seen
+    Open --> Finalizing: limit exceeded
+    Open --> Finalizing: all invocations complete
+    Open --> Finalizing: timeout expires
+    Open --> Finalizing: pinned rule version unavailable after restart
+
+    Finalizing --> Outbox: project document, enqueue, delete flow
+    Outbox --> Delivered: bulk accepted
+    Outbox --> Outbox: retryable failure, exponential backoff
+    Outbox --> DeadLetter: permanently rejected
+
+    Delivered --> [*]
+    DeadLetter --> [*]
